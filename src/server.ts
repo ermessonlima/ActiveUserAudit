@@ -8,9 +8,7 @@ import path from 'path';
 
 const Reader = require('@maxmind/geoip2-node').Reader;
 const dbFilePath = path.resolve(__dirname, 'GeoIP2-City.mmdb');
-const options = {
-  // you can use options like `cache` or `watchForUpdates`
-};
+ 
 
 dotenv.config();
 
@@ -52,7 +50,7 @@ async function getValidToken(username: string, password: string) {
 }
 
 app.get('/api/user-ip', async (req, res) => {
-  var isProcessing: any
+  var isProcessing
   if (isProcessing) {
     res.status(503).send('O processo ainda está em execução');
     return;
@@ -89,7 +87,7 @@ app.get('/api/user-ip', async (req, res) => {
 
   do {
     page++;
-    const usersResponse = await axios.post(`${process.env.BASE_URL}/shop/subscriptions/private/user/account-subscriptions?page=${page}&sort=userSubscriptionStatus,desc&size=1000`, body, {
+    const usersResponse = await axios.post(`${process.env.BASE_URL}/shop/subscriptions/private/user/account-subscriptions?page=${page}&sort=userSubscriptionStatus,desc&size=50`, body, {
       headers: {
         'Authorization': `Bearer ${token}`
       }
@@ -108,6 +106,7 @@ app.get('/api/user-ip', async (req, res) => {
       { header: 'Email', key: 'email' },
       { header: 'Postal Code', key: 'postalCode' },
       { header: 'City', key: 'city' },
+      { header: 'State', key: 'state' },
       { header: 'Country', key: 'country' },
       { header: 'Status', key: 'status' },
       { header: 'IP (User)', key: 'ipUser' },
@@ -125,7 +124,7 @@ app.get('/api/user-ip', async (req, res) => {
         }
       });
 
-      const userResponse = await axios.get(`${process.env.BASE_URL}/accounts/private/accounts/search?size=100&query=${user.accountId}`, {
+      const userResponse = await axios.get(`https://univer-prod.cloud.seachange.com/zuul/accounts/private/accounts/search?size=100&query=${user.accountId}`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -164,7 +163,8 @@ app.get('/api/user-ip', async (req, res) => {
         try {
           const responseGeo = await reader.city(ipUser || ipSystem);
 
-          console.log(responseGeo);
+          console.dir(responseGeo, { depth: null });
+          
           let userRow = {
             id: user.accountId,
             name: userResponse.data.content[0].firstName + ' ' + userResponse.data.content[0].surname,
@@ -172,6 +172,7 @@ app.get('/api/user-ip', async (req, res) => {
             status: userStatus || 'inactive',
             postalCode: '',
             city: '',
+            state : '',
             country: '',
             ipUser: ipUser,
             ipSystem: ipSystem
@@ -179,13 +180,14 @@ app.get('/api/user-ip', async (req, res) => {
 
           if (responseGeo && responseGeo.country && responseGeo.city && responseGeo.postal) {
             userRow.postalCode = responseGeo.postal.code;
-            userRow.city = responseGeo.city.names.en;
-            userRow.country = responseGeo.country.names.en;
+            userRow.city = responseGeo.city.names['pt-BR'];
+            userRow.state = responseGeo.subdivisions[0].names['pt-BR'];
+            userRow.country = responseGeo.country.names['pt-BR'];
           }
 
-          console.log(`User ${userRow.id} - ${userRow.name} - ${userRow.email} - ${userRow.postalCode} - ${userRow.city} - ${userRow.country} - ${userRow.status} - IP user ${userRow.ipUser} - IP System ${userRow.ipSystem}`);
+          console.log(`User ${userRow.id} - ${userRow.name} - ${userRow.email} - ${userRow.postalCode} - ${userRow.city} - ${userRow.state} - ${userRow.country} - ${userRow.status} - IP user ${userRow.ipUser} - IP System ${userRow.ipSystem}`);
           worksheet.addRow(userRow);
-        } catch (error: any) {
+        } catch (error:any) {
           console.log(`Error occurred while retrieving geo information: ${error.message}`);
           let userRow = {
             id: user.accountId,
@@ -194,6 +196,7 @@ app.get('/api/user-ip', async (req, res) => {
             status: userStatus || 'inactive',
             postalCode: '',
             city: '',
+            state : '',
             country: '',
             ipUser: ipUser,
             ipSystem: ipSystem
@@ -205,17 +208,32 @@ app.get('/api/user-ip', async (req, res) => {
     }
 
     console.timeEnd('Processing time');
-    await workbook.xlsx.writeFile(`users_page_${page}.xlsx`);
+
+    if (!fs.existsSync(path.resolve(__dirname, 'files'))) {
+      fs.mkdirSync(path.resolve(__dirname, 'files'));
+    }
+
+    
+    await workbook.xlsx.writeFile(path.resolve(__dirname, './files/', `users_page_${page}.xlsx`));
+
     fs.writeFileSync('last_page_processed.log', `Last page processed: ${page}`);
   } while (page * 100 < totalElements);
 
   res.send('Todos os arquivos Excel criados com sucesso.');
-} catch (err: any) {
-  console.log(`Error occurred: ${err.message}`); 
+} catch (err) {
+  process.kill(process.pid, 'SIGINT');
+  process.exit(1)
 }
 
 isProcessing = false;
 
+});
+
+
+process.on('uncaughtException', (error) => {
+  process.kill(process.pid, 'SIGINT');
+  console.error('Erro não tratado:', error);
+  process.exit(1);  
 });
 
 app.listen(port, () => {
