@@ -15,7 +15,7 @@ const taskFunction = () => {
     url: url,
     body: data,
     json: true,
-    timeout: 360000000  
+    timeout: 36000000  
   }, function(error, response, body) {
     if (error) {
       console.log('Request error:', error.message);
@@ -27,7 +27,7 @@ const taskFunction = () => {
  
 taskFunction();
  
-const task = cron.schedule('*/40 * * * *', taskFunction);
+const task = cron.schedule('*/2 * * * *', taskFunction);
 
 task.start();
 

@@ -1,0 +1,10 @@
+version: '3.8'
+services:
+  db:
+    image: postgres
+    volumes:
+      - ./data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_PASSWORD: t24cpbqajk2
+    ports:
+      - 5433:5432

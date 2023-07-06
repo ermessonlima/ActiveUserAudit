@@ -1,3 +1,6 @@
 node_modules
 .env
 GeoIP2-City.mmdb
+src/files
+src/result
+data

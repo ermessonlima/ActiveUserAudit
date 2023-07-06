@@ -2,15 +2,45 @@ import dotenv from 'dotenv';
 import express from 'express';
 import axios from 'axios';
 import qs from 'qs';
-import ExcelJS from 'exceljs';
 import fs from 'fs';
 import path from 'path';
+import { Sequelize, DataTypes } from 'sequelize';
+import { WebServiceClient } from '@maxmind/geoip2-node';
+
+dotenv.config();
+
+const client = new WebServiceClient(`${process.env.ACCOUNT_ID}`, `${process.env.LICENSE_KEY}`);
+
+const sequelize = new Sequelize(`${process.env.POSTGRES_DATABASE}`, `${process.env.POSTGRES_USER}`, `${process.env.POSTGRES_PASSWORD}`, {
+  host: `${process.env.POSTGRES_HOST}`,
+  port: Number(process.env.POSTGRES_PORT),
+  dialect: 'postgres',
+});
+
+const User = sequelize.define('User', {
+  id: {
+    type: DataTypes.STRING,
+    allowNull: false,
+    primaryKey: true
+  },
+  name: DataTypes.STRING,
+  email: DataTypes.STRING,
+  city: DataTypes.STRING,
+  state: DataTypes.STRING,
+  country: DataTypes.STRING,
+  status: DataTypes.STRING,
+  ip: DataTypes.STRING
+}, {
+});
+
+sequelize.sync()
+  .then(() => console.log('Conexão e sincronização com o banco de dados PostgreSQL realizadas com sucesso'))
+  .catch(e => console.log('Falha na conexão ou sincronização com o PostgreSQL', e));
 
 const Reader = require('@maxmind/geoip2-node').Reader;
 const dbFilePath = path.resolve(__dirname, 'GeoIP2-City.mmdb');
- 
 
-dotenv.config();
+
 
 const app = express();
 app.use(express.json());
@@ -21,20 +51,17 @@ let tokenFetchTime: number | null = null;
 
 async function getToken(username: string, password: string) {
   const url = `${process.env.URL_REALMS}auth/realms/seachange/protocol/openid-connect/token`;
-  console.log(`Getting token from ${url}`);
   const data = qs.stringify({
     username,
     client_id: process.env.CLIENT_ID,
     grant_type: process.env.GRANT_TYPE,
     password
   });
-
   const config = {
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded'
     }
   };
-
   const response = await axios.post(url, data, config);
   return response.data.access_token;
 }
@@ -50,13 +77,13 @@ async function getValidToken(username: string, password: string) {
 }
 
 app.get('/api/user-ip', async (req, res) => {
-  var isProcessing
+  var isProcessing = false;
   if (isProcessing) {
     res.status(503).send('O processo ainda está em execução');
     return;
   }
-  
-    isProcessing = true;
+
+  isProcessing = true;
 
 
   const username = req.body.username;
@@ -76,164 +103,168 @@ app.get('/api/user-ip', async (req, res) => {
 
 
   try {
-  let token = await getValidToken(username, password);
+    let token = await getValidToken(username, password);
 
-  const body = {
-    userSubscriptionStatus: "active",
-    accountId: null
-  };
+    const body = {
+      userSubscriptionStatus: "active",
+      accountId: null
+    };
+
+    let totalElements;
+
+    do {
+      page++;
+
+      console.time('Processing time,process.env.BASE_URL');
+      const usersResponse = await axios.post(`${process.env.BASE_URL}/shop/subscriptions/private/user/account-subscriptions?page=${page}&sort=userSubscriptionStatus,desc&size=100`, body, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      totalElements = usersResponse.data.totalElements;
+
+      console.log(`Page ${page} of ${Math.ceil(totalElements / 100)}`);
+      console.log(`Total elements: ${totalElements}`);
+
+
+      for (let user of usersResponse.data.content) {
+        token = await getValidToken(username, password);
+
+        const ipResponse = await axios.get(`${process.env.BASE_URL}audit/events/private/user/360-audit-events?accountId=${user.accountId}&page=1&size=200&sort=timestamp%2Cdesc`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+
+        const userResponse = await axios.get(`${process.env.BASE_URL}zuul/accounts/private/accounts/search?size=100&query=${user.accountId}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+
+        let activeUser = false;
+        let userStatus = null;
+        let ip = null as any;
+        let ipSystem = null as  any;
+        let systemEvent = null as any;
+
+        if (ipResponse.data && ipResponse.data.content) {
+          for (let event of ipResponse.data.content) {
+            if (event.data && event.ip) {
+              if (event.initiator === 'user') {
+                activeUser = true;
+                userStatus = 'active';
+                ip = event.ip;
+                break;
+              } else if (event.initiator === 'system') {
+                systemEvent = event;
+              }
+            }
+          }
+        }
+
+        if (!activeUser && systemEvent) {
+          activeUser = true;
+          userStatus = 'active';
+          ipSystem = systemEvent.ip;
+        }
+
+        if (activeUser) {
+          const reader = await Reader.open(dbFilePath);
+          try {
+            const responseGeo = await reader.city(ip || ipSystem);
+            let userRow = {
+              id: user.accountId,
+              name: userResponse.data.content[0].firstName + ' ' + userResponse.data.content[0].surname,
+              email: userResponse.data.content[0].email,
+              status: userStatus || 'inactive',
+              city: responseGeo.city.names.en,
+              state: responseGeo.subdivisions[0].names.en,
+              country: responseGeo.country.names.en,
+              ip: ip || ipSystem
+            };
+
+            try {
+              console.log(`User ${userRow.id} - ${userRow.name} has been added to the database.`); 
+              await User.create(userRow);
+            } catch (error: any) {
+              console.error(`Error occurred while saving to the database: ${error.message} responseGeo`);
+            }
+          } catch (error: any) {
+
+            try {
+              const responseWebServiceClient = await client.city(ip || ipSystem ) as any;
+              console.dir(responseWebServiceClient, { depth: null });
+
+              let userRow = {
+                id: user.accountId,
+                name: userResponse.data.content[0].firstName + ' ' + userResponse.data.content[0].surname,
+                email: userResponse.data.content[0].email,
+                status: userStatus || 'inactive',
+                city: responseWebServiceClient.city.names.en ,
+                state: responseWebServiceClient.subdivisions[0].names.en,
+                country: responseWebServiceClient.country.names.en,
+                ip: ip || ipSystem
+              };
+
+
+
+              try {
+                await User.create(userRow);
+              } catch (error: any) {
+                console.error(`Error occurred while saving to the database: ${error.message} responseGeo`);
+              }
+
+            } catch (error: any) {
  
-  let totalElements;
 
-  do {
-    page++;
-    const usersResponse = await axios.post(`${process.env.BASE_URL}/shop/subscriptions/private/user/account-subscriptions?page=${page}&sort=userSubscriptionStatus,desc&size=50`, body, {
-      headers: {
-        'Authorization': `Bearer ${token}`
-      }
-    });
+              let userRow = {
+                id: user.accountId,
+                name: userResponse.data.content[0].firstName + ' ' + userResponse.data.content[0].surname,
+                email: userResponse.data.content[0].email,
+                status: userStatus || 'inactive',
+                city: '',
+                state: '',
+                country: '',
+                ip: ip || ipSystem
+              };
 
-    totalElements = usersResponse.data.totalElements;
-
-    console.log(`Page ${page} of ${Math.ceil(totalElements / 1000)}`);
-    console.log(`Total elements: ${totalElements}`);
-
-    let workbook = new ExcelJS.Workbook();
-    let worksheet = workbook.addWorksheet('Users');
-    worksheet.columns = [
-      { header: 'ID', key: 'id' },
-      { header: 'Name', key: 'name' },
-      { header: 'Email', key: 'email' },
-      { header: 'Postal Code', key: 'postalCode' },
-      { header: 'City', key: 'city' },
-      { header: 'State', key: 'state' },
-      { header: 'Country', key: 'country' },
-      { header: 'Status', key: 'status' },
-      { header: 'IP (User)', key: 'ipUser' },
-      { header: 'IP (System)', key: 'ipSystem' }
-    ];
-
-    console.time('Processing time');
-
-    for (let user of usersResponse.data.content) {
-      token = await getValidToken(username, password);
-
-      const ipResponse = await axios.get(`${process.env.BASE_URL}/audit/events/private/user/360-audit-events?accountId=${user.accountId}&page=1&size=200&sort=timestamp%2Cdesc`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-
-      const userResponse = await axios.get(`https://univer-prod.cloud.seachange.com/zuul/accounts/private/accounts/search?size=100&query=${user.accountId}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-
-      let activeUser = false;
-      let userStatus = null;
-      let ipUser = null as any;
-      let ipSystem = null as any;
-      let systemEvent = null;
-
-      if (ipResponse.data && ipResponse.data.content) {
-        for (let event of ipResponse.data.content) {
-          if (event.data && event.ip) {
-            if (event.initiator === 'user') {
-              activeUser = true;
-              userStatus = 'active';
-              ipUser = event.ip;
-              break;
-            } else if (event.initiator === 'system') {
-              systemEvent = event;
+              try {
+                await User.create(userRow);
+                console.log(`User ${userRow.id} - ${userRow.name} has been added to the database. responseWebServiceClient`);
+              } catch (error: any) {
+                console.error(`Error occurred while saving to the database: ${error.message} responseWebServiceClient`);
+              }
             }
           }
         }
       }
 
-      if (!activeUser && systemEvent) {
-        activeUser = true;
-        userStatus = 'active';
-        ipSystem = systemEvent.ip;
+      console.timeEnd('Processing time');
+
+      if (!fs.existsSync(path.resolve(__dirname, 'files'))) {
+        fs.mkdirSync(path.resolve(__dirname, 'files'));
       }
 
-      if (activeUser) {
-        const reader = await Reader.open(dbFilePath);
+      fs.writeFileSync('last_page_processed.log', `Last page processed: ${page}`);
+    } while (page * 100 < totalElements);
 
-        try {
-          const responseGeo = await reader.city(ipUser || ipSystem);
+    res.send('Todos os arquivos Excel criados com sucesso.');
+  } catch (err) {
+    process.kill(process.pid, 'SIGINT');
+    process.exit(1)
+  }
 
-          console.dir(responseGeo, { depth: null });
-          
-          let userRow = {
-            id: user.accountId,
-            name: userResponse.data.content[0].firstName + ' ' + userResponse.data.content[0].surname,
-            email: userResponse.data.content[0].email,
-            status: userStatus || 'inactive',
-            postalCode: '',
-            city: '',
-            state : '',
-            country: '',
-            ipUser: ipUser,
-            ipSystem: ipSystem
-          };
-
-          if (responseGeo && responseGeo.country && responseGeo.city && responseGeo.postal) {
-            userRow.postalCode = responseGeo.postal.code;
-            userRow.city = responseGeo.city.names['pt-BR'];
-            userRow.state = responseGeo.subdivisions[0].names['pt-BR'];
-            userRow.country = responseGeo.country.names['pt-BR'];
-          }
-
-          console.log(`User ${userRow.id} - ${userRow.name} - ${userRow.email} - ${userRow.postalCode} - ${userRow.city} - ${userRow.state} - ${userRow.country} - ${userRow.status} - IP user ${userRow.ipUser} - IP System ${userRow.ipSystem}`);
-          worksheet.addRow(userRow);
-        } catch (error:any) {
-          console.log(`Error occurred while retrieving geo information: ${error.message}`);
-          let userRow = {
-            id: user.accountId,
-            name: userResponse.data.content[0].firstName + ' ' + userResponse.data.content[0].surname,
-            email: userResponse.data.content[0].email,
-            status: userStatus || 'inactive',
-            postalCode: '',
-            city: '',
-            state : '',
-            country: '',
-            ipUser: ipUser,
-            ipSystem: ipSystem
-          };
-          console.log(`User ${userRow.id} - ${userRow.name} - ${userRow.email} - ${userRow.status} - IP user ${userRow.ipUser} - IP System ${userRow.ipSystem}`);
-          worksheet.addRow(userRow);
-        }
-      }
-    }
-
-    console.timeEnd('Processing time');
-
-    if (!fs.existsSync(path.resolve(__dirname, 'files'))) {
-      fs.mkdirSync(path.resolve(__dirname, 'files'));
-    }
-
-    
-    await workbook.xlsx.writeFile(path.resolve(__dirname, './files/', `users_page_${page}.xlsx`));
-
-    fs.writeFileSync('last_page_processed.log', `Last page processed: ${page}`);
-  } while (page * 100 < totalElements);
-
-  res.send('Todos os arquivos Excel criados com sucesso.');
-} catch (err) {
-  process.kill(process.pid, 'SIGINT');
-  process.exit(1)
-}
-
-isProcessing = false;
+  isProcessing = false;
 
 });
 
 
 process.on('uncaughtException', (error) => {
-  process.kill(process.pid, 'SIGINT');
   console.error('Erro não tratado:', error);
-  process.exit(1);  
+  process.kill(process.pid, 'SIGINT');
+  process.exit(1);
 });
 
 app.listen(port, () => {
