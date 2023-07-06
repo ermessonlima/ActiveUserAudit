@@ -130,13 +130,37 @@ app.get('/api/user-ip', async (req, res) => {
 
       for (let user of usersResponse.data.content) {
         token = await getValidToken(username, password);
+ 
 
-        const ipResponse = await axios.get(`${process.env.BASE_URL}audit/events/private/user/360-audit-events?accountId=${user.accountId}&page=1&size=200&sort=timestamp%2Cdesc`, {
-          headers: {
-            'Authorization': `Bearer ${token}`
+        let ipResponse;
+        let page = 1;
+        let size = 200;
+
+        while (true) {
+          ipResponse = await axios.get(`${process.env.BASE_URL}audit/events/private/user/360-audit-events?accountId=${user.accountId}&page=${page}&size=${size}&sort=timestamp%2Cdesc`, {
+            headers: {
+              'Authorization': `Bearer ${token}`
+            }
+          });
+
+          let foundUserEvent = false;
+
+          if (ipResponse.data && ipResponse.data.content) {
+            for (let event of ipResponse.data.content) {
+              if (event.data && event.ip && event.initiator === 'user') {
+                foundUserEvent = true;
+                break;
+              }
+            }
           }
-        });
 
+          if (foundUserEvent || ipResponse.data.content.length < size) {
+            break;
+          }
+
+          page++;
+        }
+ 
         const userResponse = await axios.get(`${process.env.BASE_URL}zuul/accounts/private/accounts/search?size=100&query=${user.accountId}`, {
           headers: {
             'Authorization': `Bearer ${token}`
@@ -146,7 +170,7 @@ app.get('/api/user-ip', async (req, res) => {
         let activeUser = false;
         let userStatus = null;
         let ip = null as any;
-        let ipSystem = null as  any;
+        let ipSystem = null as any;
         let systemEvent = null as any;
 
         if (ipResponse.data && ipResponse.data.content) {
@@ -186,7 +210,7 @@ app.get('/api/user-ip', async (req, res) => {
             };
 
             try {
-              console.log(`User ${userRow.id} - ${userRow.name} has been added to the database.`); 
+              console.log(`User ${userRow.id} - ${userRow.name} has been added to the database.`);
               await User.create(userRow);
             } catch (error: any) {
               console.error(`Error occurred while saving to the database: ${error.message} responseGeo`);
@@ -194,7 +218,7 @@ app.get('/api/user-ip', async (req, res) => {
           } catch (error: any) {
 
             try {
-              const responseWebServiceClient = await client.city(ip || ipSystem ) as any;
+              const responseWebServiceClient = await client.city(ip || ipSystem) as any;
               console.dir(responseWebServiceClient, { depth: null });
 
               let userRow = {
@@ -202,7 +226,7 @@ app.get('/api/user-ip', async (req, res) => {
                 name: userResponse.data.content[0].firstName + ' ' + userResponse.data.content[0].surname,
                 email: userResponse.data.content[0].email,
                 status: userStatus || 'inactive',
-                city: responseWebServiceClient.city.names.en ,
+                city: responseWebServiceClient.city.names.en,
                 state: responseWebServiceClient.subdivisions[0].names.en,
                 country: responseWebServiceClient.country.names.en,
                 ip: ip || ipSystem
@@ -217,7 +241,7 @@ app.get('/api/user-ip', async (req, res) => {
               }
 
             } catch (error: any) {
- 
+
 
               let userRow = {
                 id: user.accountId,
