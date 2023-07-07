@@ -17,7 +17,24 @@ const sequelize = new Sequelize(`${process.env.POSTGRES_DATABASE}`, `${process.e
   dialect: 'postgres',
 });
 
-const User = sequelize.define('User', {
+const User_active = sequelize.define('User_active', {
+  id: {
+    type: DataTypes.STRING,
+    allowNull: false,
+    primaryKey: true
+  },
+  name: DataTypes.STRING,
+  email: DataTypes.STRING,
+  city: DataTypes.STRING,
+  state: DataTypes.STRING,
+  country: DataTypes.STRING,
+  status: DataTypes.STRING,
+  ip: DataTypes.STRING
+}, {
+});
+
+
+const User_grace_period = sequelize.define('User_grace_period', {
   id: {
     type: DataTypes.STRING,
     allowNull: false,
@@ -76,7 +93,7 @@ async function getValidToken(username: string, password: string) {
   return token;
 }
 
-app.get('/api/user-ip', async (req, res) => {
+app.get('/api/user-active', async (req, res) => {
   var isProcessing = false;
   if (isProcessing) {
     res.status(503).send('O processo ainda está em execução');
@@ -92,8 +109,8 @@ app.get('/api/user-ip', async (req, res) => {
   let page = 0;
 
   try {
-    const data = fs.readFileSync('last_page_processed.log', 'utf8');
-    const match = data.match(/Last page processed: (\d+)/);
+    const data = fs.readFileSync('last_page_processed_active.log', 'utf8');
+    const match = data.match(/Last page processed active: (\d+)/);
     if (match) {
       page = Number(match[1]);
     }
@@ -202,7 +219,7 @@ app.get('/api/user-ip', async (req, res) => {
               id: user.accountId,
               name: userResponse.data.content[0].firstName + ' ' + userResponse.data.content[0].surname,
               email: userResponse.data.content[0].email,
-              status: userStatus || 'inactive',
+              status: user.userSubscriptionStatus,
               city: responseGeo.city.names.en,
               state: responseGeo.subdivisions[0].names.en,
               country: responseGeo.country.names.en,
@@ -211,7 +228,7 @@ app.get('/api/user-ip', async (req, res) => {
 
             try {
               console.log(`User ${userRow.id} - ${userRow.name} has been added to the database.`);
-              await User.create(userRow);
+              await User_active.create(userRow);
             } catch (error: any) {
               console.error(`Error occurred while saving to the database: ${error.message} responseGeo`);
             }
@@ -225,7 +242,7 @@ app.get('/api/user-ip', async (req, res) => {
                 id: user.accountId,
                 name: userResponse.data.content[0].firstName + ' ' + userResponse.data.content[0].surname,
                 email: userResponse.data.content[0].email,
-                status: userStatus || 'inactive',
+                status: user.userSubscriptionStatus,
                 city: responseWebServiceClient.city.names.en,
                 state: responseWebServiceClient.subdivisions[0].names.en,
                 country: responseWebServiceClient.country.names.en,
@@ -235,7 +252,7 @@ app.get('/api/user-ip', async (req, res) => {
 
 
               try {
-                await User.create(userRow);
+                await User_active.create(userRow);
               } catch (error: any) {
                 console.error(`Error occurred while saving to the database: ${error.message} responseGeo`);
               }
@@ -247,7 +264,7 @@ app.get('/api/user-ip', async (req, res) => {
                 id: user.accountId,
                 name: userResponse.data.content[0].firstName + ' ' + userResponse.data.content[0].surname,
                 email: userResponse.data.content[0].email,
-                status: userStatus || 'inactive',
+                status:  user.userSubscriptionStatus,
                 city: '',
                 state: '',
                 country: '',
@@ -255,7 +272,7 @@ app.get('/api/user-ip', async (req, res) => {
               };
 
               try {
-                await User.create(userRow);
+                await User_active.create(userRow);
                 console.log(`User ${userRow.id} - ${userRow.name} has been added to the database. responseWebServiceClient`);
               } catch (error: any) {
                 console.error(`Error occurred while saving to the database: ${error.message} responseWebServiceClient`);
@@ -271,7 +288,221 @@ app.get('/api/user-ip', async (req, res) => {
         fs.mkdirSync(path.resolve(__dirname, 'files'));
       }
 
-      fs.writeFileSync('last_page_processed.log', `Last page processed: ${page}`);
+      fs.writeFileSync('last_page_processed_active.log', `Last page processed active: ${page}`);
+    } while (page * 100 < totalElements);
+
+    res.send('Todos os arquivos Excel criados com sucesso.');
+  } catch (err) {
+    process.kill(process.pid, 'SIGINT');
+    process.exit(1)
+  }
+
+  isProcessing = false;
+
+});
+
+
+
+
+
+
+
+app.get('/api/user-grace-period', async (req, res) => {
+  var isProcessing = false;
+  if (isProcessing) {
+    res.status(503).send('O processo ainda está em execução');
+    return;
+  }
+
+  isProcessing = true;
+
+
+  const username = req.body.username;
+  const password = req.body.password;
+
+  let page = 0;
+
+  try {
+    const data = fs.readFileSync('last_page_processed_user_grace_period.log', 'utf8');
+    const match = data.match(/Last page processed grace period: (\d+)/);
+    if (match) {
+      page = Number(match[1]);
+    }
+  } catch (err) {
+    console.log('No previous page found. Starting from page 1.');
+  }
+
+
+  try {
+    let token = await getValidToken(username, password);
+
+    const body = {
+      userSubscriptionStatus: "grace_period",
+      accountId: null
+    };
+
+    let totalElements;
+
+    do {
+      page++;
+
+      console.time('Processing time,process.env.BASE_URL');
+      const usersResponse = await axios.post(`${process.env.BASE_URL}/shop/subscriptions/private/user/account-subscriptions?page=${page}&sort=userSubscriptionStatus,desc&size=100`, body, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      totalElements = usersResponse.data.totalElements;
+
+      console.log(`Page ${page} of ${Math.ceil(totalElements / 100)}`);
+      console.log(`Total elements: ${totalElements}`);
+
+
+      for (let user of usersResponse.data.content) {
+        token = await getValidToken(username, password);
+ 
+
+        let ipResponse;
+        let page = 1;
+        let size = 200;
+
+        while (true) {
+          ipResponse = await axios.get(`${process.env.BASE_URL}audit/events/private/user/360-audit-events?accountId=${user.accountId}&page=${page}&size=${size}&sort=timestamp%2Cdesc`, {
+            headers: {
+              'Authorization': `Bearer ${token}`
+            }
+          });
+
+          let foundUserEvent = false;
+
+          if (ipResponse.data && ipResponse.data.content) {
+            for (let event of ipResponse.data.content) {
+              if (event.data && event.ip && event.initiator === 'user') {
+                foundUserEvent = true;
+                break;
+              }
+            }
+          }
+
+          if (foundUserEvent || ipResponse.data.content.length < size) {
+            break;
+          }
+
+          page++;
+        }
+ 
+        const userResponse = await axios.get(`${process.env.BASE_URL}zuul/accounts/private/accounts/search?size=100&query=${user.accountId}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+
+        let gracePeriodUser = false;
+        let userStatus = null;
+        let ip = null as any;
+        let ipSystem = null as any;
+        let systemEvent = null as any;
+
+        if (ipResponse.data && ipResponse.data.content) {
+          for (let event of ipResponse.data.content) {
+            if (event.data && event.ip) {
+              if (event.initiator === 'user') {
+                gracePeriodUser = true;
+                userStatus = 'grace_period';
+                ip = event.ip;
+                break;
+              } else if (event.initiator === 'system') {
+                systemEvent = event;
+              }
+            }
+          }
+        }
+
+        if (!gracePeriodUser && systemEvent) {
+          gracePeriodUser = true;
+          userStatus = 'grace_period';
+          ipSystem = systemEvent.ip;
+        }
+
+        if (gracePeriodUser) {
+          const reader = await Reader.open(dbFilePath);
+          try {
+            const responseGeo = await reader.city(ip || ipSystem);
+            let userRow = {
+              id: user.accountId,
+              name: userResponse.data.content[0].firstName + ' ' + userResponse.data.content[0].surname,
+              email: userResponse.data.content[0].email,
+              status: user.userSubscriptionStatus,
+              city: responseGeo.city.names.en,
+              state: responseGeo.subdivisions[0].names.en,
+              country: responseGeo.country.names.en,
+              ip: ip || ipSystem
+            };
+
+            try {
+              console.log(`User ${userRow.id} - ${userRow.name} has been added to the database.`);
+              await User_grace_period.create(userRow);
+            } catch (error: any) {
+              console.error(`Error occurred while saving to the database: ${error.message} responseGeo`);
+            }
+          } catch (error: any) {
+
+            try {
+              const responseWebServiceClient = await client.city(ip || ipSystem) as any;
+              console.dir(responseWebServiceClient, { depth: null });
+
+              let userRow = {
+                id: user.accountId,
+                name: userResponse.data.content[0].firstName + ' ' + userResponse.data.content[0].surname,
+                email: userResponse.data.content[0].email,
+                status: user.userSubscriptionStatus,
+                city: responseWebServiceClient.city.names.en,
+                state: responseWebServiceClient.subdivisions[0].names.en,
+                country: responseWebServiceClient.country.names.en,
+                ip: ip || ipSystem
+              };
+
+
+
+              try {
+                await User_grace_period.create(userRow);
+              } catch (error: any) {
+                console.error(`Error occurred while saving to the database: ${error.message} responseGeo`);
+              }
+
+            } catch (error: any) {
+
+
+              let userRow = {
+                id: user.accountId,
+                name: userResponse.data.content[0].firstName + ' ' + userResponse.data.content[0].surname,
+                email: userResponse.data.content[0].email,
+                status: user.userSubscriptionStatus,
+                city: '',
+                state: '',
+                country: '',
+                ip: ip || ipSystem
+              };
+
+              try {
+                await User_grace_period.create(userRow);
+                console.log(`User ${userRow.id} - ${userRow.name} has been added to the database. responseWebServiceClient`);
+              } catch (error: any) {
+                console.error(`Error occurred while saving to the database: ${error.message} responseWebServiceClient`);
+              }
+            }
+          }
+        }
+      }
+
+      console.timeEnd('Processing time');
+
+      if (!fs.existsSync(path.resolve(__dirname, 'files'))) {
+        fs.mkdirSync(path.resolve(__dirname, 'files'));
+      }
+
+      fs.writeFileSync('last_page_processed_user_grace_period.log', `Last page processed grace period: ${page}`);
     } while (page * 100 < totalElements);
 
     res.send('Todos os arquivos Excel criados com sucesso.');
