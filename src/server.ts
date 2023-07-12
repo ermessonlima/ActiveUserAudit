@@ -215,10 +215,17 @@ app.get('/api/user-active', async (req, res) => {
           const reader = await Reader.open(dbFilePath);
           try {
             const responseGeo = await reader.city(ip || ipSystem);
+
+            let userContent = userResponse.data.content[0];
+
+            let name = (userContent?.firstName ? userContent.firstName : '') + (userContent?.surname ? ' ' + userContent.surname : '');
+            name = name.trim();
+
+
             let userRow = {
               id: user.accountId,
-              name: userResponse.data.content[0].firstName + ' ' + userResponse.data.content[0].surname,
-              email: userResponse.data.content[0].email,
+              name: name,
+              email: userContent?.email ? userContent.email : '',
               status: user.userSubscriptionStatus,
               city: responseGeo.city.names.en,
               state: responseGeo.subdivisions[0].names.en,
@@ -233,15 +240,21 @@ app.get('/api/user-active', async (req, res) => {
               console.error(`Error occurred while saving to the database: ${error.message} responseGeo`);
             }
           } catch (error: any) {
+            console.log('e', error);
 
             try {
               const responseWebServiceClient = await client.city(ip || ipSystem) as any;
-              console.dir(responseWebServiceClient, { depth: null });
+             
+              let userContent = userResponse.data.content[0];
+
+              let name = (userContent?.firstName ? userContent.firstName : '') + (userContent?.surname ? ' ' + userContent.surname : '');
+              name = name.trim();
+
 
               let userRow = {
                 id: user.accountId,
-                name: userResponse.data.content[0].firstName + ' ' + userResponse.data.content[0].surname,
-                email: userResponse.data.content[0].email,
+                name: name,
+                email: userContent?.email ? userContent.email : '',
                 status: user.userSubscriptionStatus,
                 city: responseWebServiceClient.city.names.en,
                 state: responseWebServiceClient.subdivisions[0].names.en,
@@ -258,17 +271,23 @@ app.get('/api/user-active', async (req, res) => {
               }
 
             } catch (error: any) {
+              console.log('e', error);
+
+              let userContent = userResponse.data.content[0];
+
+              let name = (userContent?.firstName ? userContent.firstName : '') + (userContent?.surname ? ' ' + userContent.surname : '');
+              name = name.trim();
 
 
               let userRow = {
                 id: user.accountId,
-                name: userResponse.data.content[0].firstName + ' ' + userResponse.data.content[0].surname,
-                email: userResponse.data.content[0].email,
+                name: name,
+                email:  userContent?.email ? userContent.email : '',
                 status:  user.userSubscriptionStatus,
                 city: '',
                 state: '',
                 country: '',
-                ip: ip || ipSystem
+                ip: ''
               };
 
               try {
@@ -291,10 +310,11 @@ app.get('/api/user-active', async (req, res) => {
       fs.writeFileSync('last_page_processed_active.log', `Last page processed active: ${page}`);
     } while (page * 100 < totalElements);
 
-    res.send('Todos os arquivos Excel criados com sucesso.');
+    res.send('Sucesso.');
   } catch (err) {
-    process.kill(process.pid, 'SIGINT');
-    process.exit(1)
+    console.log(err);
+    // process.kill(process.pid, 'SIGINT');
+    // process.exit(1)
   }
 
   isProcessing = false;
@@ -362,7 +382,9 @@ app.get('/api/user-grace-period', async (req, res) => {
       for (let user of usersResponse.data.content) {
         token = await getValidToken(username, password);
  
-
+        let countRequestWebServiceClient = 0;
+        let countResponseGeo = 0;
+        let countRequest = 0;
         let ipResponse;
         let page = 1;
         let size = 200;
@@ -428,6 +450,9 @@ app.get('/api/user-grace-period', async (req, res) => {
         if (gracePeriodUser) {
           const reader = await Reader.open(dbFilePath);
           try {
+
+            countResponseGeo++;
+            console.log(`Total countResponseGeo: ${countResponseGeo}`);
             const responseGeo = await reader.city(ip || ipSystem);
             let userRow = {
               id: user.accountId,
@@ -449,6 +474,9 @@ app.get('/api/user-grace-period', async (req, res) => {
           } catch (error: any) {
 
             try {
+
+              countRequestWebServiceClient++;
+              console.log(`Total countRequestWebServiceClient: ${countRequestWebServiceClient}`);
               const responseWebServiceClient = await client.city(ip || ipSystem) as any;
               console.dir(responseWebServiceClient, { depth: null });
 
@@ -473,7 +501,8 @@ app.get('/api/user-grace-period', async (req, res) => {
 
             } catch (error: any) {
 
-
+              countRequest++;
+              console.log(`Total countRequest: ${countRequest}`);
               let userRow = {
                 id: user.accountId,
                 name: userResponse.data.content[0].firstName + ' ' + userResponse.data.content[0].surname,
@@ -482,7 +511,7 @@ app.get('/api/user-grace-period', async (req, res) => {
                 city: '',
                 state: '',
                 country: '',
-                ip: ip || ipSystem
+                ip: ip || ''
               };
 
               try {
@@ -507,6 +536,7 @@ app.get('/api/user-grace-period', async (req, res) => {
 
     res.send('Todos os arquivos Excel criados com sucesso.');
   } catch (err) {
+    console.log(err);
     process.kill(process.pid, 'SIGINT');
     process.exit(1)
   }
@@ -517,9 +547,10 @@ app.get('/api/user-grace-period', async (req, res) => {
 
 
 process.on('uncaughtException', (error) => {
-  console.error('Erro não tratado:', error);
-  process.kill(process.pid, 'SIGINT');
-  process.exit(1);
+  
+    console.log('Erro não tratado:', error);
+  // process.kill(process.pid, 'SIGINT');
+  // process.exit(1);
 });
 
 app.listen(port, () => {

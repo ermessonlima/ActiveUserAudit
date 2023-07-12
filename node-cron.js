@@ -2,7 +2,7 @@ require('dotenv').config();
 const cron = require('node-cron');
 const request = require('request');
 
-const url = 'http://localhost:3000/api/user-ip';
+const url = 'http://localhost:3000/api/user-active';
 const data = {
   username: process.env.USERNAME,
   password: process.env.PASSWORD
@@ -27,7 +27,7 @@ const taskFunction = () => {
  
 taskFunction();
  
-const task = cron.schedule('*/2 * * * *', taskFunction);
+const task = cron.schedule('*/10 * * * *', taskFunction);
 
 task.start();
 
